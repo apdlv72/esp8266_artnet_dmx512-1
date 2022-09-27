@@ -5,7 +5,7 @@
 #define DMX_CHANNELS 512
 
 // See comments below
-//#define I2S_SUPER_SAFE
+#define I2S_SUPER_SAFE
 
 #ifdef I2S_SUPER_SAFE
 
@@ -15,9 +15,9 @@
 // DMX data quickly enough.
 // Using these parameters results in a throughput of approx. 29.7 packets/s (with 512 DMX channels)
 typedef struct {
-  uint16_t mark_before_break[10]; // 10 * 16 bits * 4 us -> 640 us
-  uint16_t space_for_break[2];   // 2 * 16 bits * 4 us -> 128 us
-  uint16_t mark_after_break;     // 13 MSB low bits * 4 us adds 52 us to space_for_break -> 180 us
+  uint16_t mark_before_break[10]; // 10 * 16 bits * 4 us -> 640 us (high)
+  uint16_t space_for_break[2];   // 2 * 16 bits * 4 us -> 128 us (low) 
+  uint16_t mark_after_break;     // 0b000001110, 13 MSB low bits * 4 us add 52 us to space_for_break -> 180 us
   // each "byte" (actually a word) consists of:
   // 8 bits payload + 7 stop bits (high) + 1 start (low) for the next byte  
   uint16_t dmx_bytes[DMX_CHANNELS+1];
@@ -26,7 +26,7 @@ typedef struct {
 #else 
 
 // This configuration sets way shorter MBB and SFB but still adds lots of extra stop bits.
-// At least for my devices this still works and increases thrughput slightly to 30.3  packets/s. 
+// At least for my devices this still works and increases throughput slightly to 30.3  packets/s. 
 typedef struct {
   uint16_t mark_before_break[1]; // 1 * 16 bits * 4 us -> 64 us
   uint16_t space_for_break[1];   // 1 * 16 bits * 4 us -> 64 us
@@ -36,6 +36,8 @@ typedef struct {
   uint16_t dmx_bytes[DMX_CHANNELS+1];
 } i2s_packet;
 
+#endif // I2S_SUPER_SAFE
+
 void logI2SInfo() {
 #ifdef I2S_SUPER_SAFE
   Serial.println("Using super safe I2S timing");
@@ -43,6 +45,7 @@ void logI2SInfo() {
   Serial.println("Using normal I2S timing");
 #endif    
 }
+
 // TODO try to reduce number of stop bits
 /* 
  E.g. as below with 3 stop bits. However, it's questionable if that still will work with sloppy devices,
@@ -60,6 +63,5 @@ struct {
   // 12 + 12 = 24 = 3 bytes
 }
 */
-#endif
 
 #endif // _I2S_DMX_H_

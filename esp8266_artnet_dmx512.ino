@@ -13,7 +13,7 @@
 // use the device without a local Wifi network or choose to connect one later.
 // Consider setting also a password in standalonemode, otherwise someone else might
 // configure your device to connect to a random Wifi.
-//#define ENABLE_STANDALONE
+#define ENABLE_STANDALONE
 //#define STANDALONE_PASSWORD "secretsecret"
 
 // Uncomment to send DMX data using the microcontroller's builtin UART.
@@ -28,7 +28,7 @@
 // issues with background activity such as handling WiFi, interrupts etc.
 // However - because of the extra timing/pauses for sloppy device, sending DMX over I2S
 // will cause throughput to drop from approx 40 packets/s to around 30.
-//#define ENABLE_I2S
+#define ENABLE_I2S
 
 // Enable kind of unit test for new I2S code moving around a knowingly picky device
 // (china brand moving head with timing issues)
@@ -114,6 +114,13 @@ long tic_i2s = 0;
 unsigned long i2sCounter;
 #endif
 
+void printBits(byte b) {    
+    for (int j = 7; j >= 0; j--) {
+        byte bit = (b >> j) & 1;
+        Serial.printf("%u", bit);
+    }
+}
+
 // This will be called for each UDP packet received
 void onDmxPacket(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t * data) {
 
@@ -147,22 +154,27 @@ void onDmxPacket(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t *
     // TODO optimize i2s such that it can send less than 512 bytes if not required (length<512)
     // we are sending I2S _frames_ (not bytes) and every frame consists of 2 words,
     // so we must ensure an even number of DMX values where every walue is a word
-    /* do not activate before thoroughly tested with arbitrary DMX sizes
-    int even_length = 2 * (length + 1) / 2;
+    int even_length = DMX_CHANNELS;
+    /* 
+     The code below does not work for me. 
+     Do not activate before thoroughly testing & debugging with arbitrary DMX sizes for your setup.
+     It seems to me like some device do not expect any other DMX size than 512.
+     
+    even_length = 2 * (length + 1) / 2;
     if (even_length > DMX_CHANNELS) {
       even_length = DMX_CHANNELS;
     }
     int skipped_bytes = 2 * (DMX_CHANNELS - even_length); // divisible by 4
     global.i2s_length = sizeof(global.i2s_data) - skipped_bytes;
-    Serial.printf("length=%d, even_length=%d, skipped_bytes=%d, i2s_length=%d, sizeof(i2s_data)=%d\n",
-                  length, even_length, skipped_bytes, global.i2s_length, sizeof(global.i2s_data));
-    */
-
-    for (int i = 0; i < DMX_CHANNELS; i++) {
+    Serial.printf("onDmxPacket: length=%d, even_length=%d, skipped_bytes=%d, i2s_length=%d, sizeof(i2s_data)=%d\n",
+                  length, even_length, skipped_bytes, global.i2s_length, sizeof(global.i2s_data));    
+    */    
+    for (int i = 0; i < even_length; i++) {
       uint16_t hi = i < length ? flipByte(data[i]) : 0;
-      // Add stop bits and start bit of next byte unless there is no next byte.
-      uint16_t lo = i == DMX_CHANNELS - 1 ? 0b0000000011111111 : 0b0000000011111110;
-      // leave the start-byte (index 0) untouched => +1:
+      // Add stop bits and start bit of next byte unless there
+      // is no next byte because the current is the last one.
+      uint16_t lo = i == (even_length-1) ? 0b0000000011111111 : 0b0000000011111110;
+      // Leave the start-byte (index 0) untouched => +1:
       global.i2s_data.dmx_bytes[i + 1] = (hi << 8) | lo;
     }
 #endif
@@ -383,22 +395,55 @@ void initI2S() {
   }
   // Set MSB NOT to 0 for the last byte because MBB (mark for break will follow)
   global.i2s_data.dmx_bytes[DMX_CHANNELS] = (uint16_t) 0b0000000011111111;
-
-  config.universe = 0;
+  global.i2s_length = sizeof(global.i2s_data);
 
   i2s_begin();
   // 250.000 baud / 32 bits = 7812
   i2s_set_rate(7812);
 
-  // Use this to fine tune frequency: should be 125 kHz
+  // Use this to fine tune frequency: oscilloscope should show 125 kHz square wave
   //memset(&data, 0b01010101, sizeof(data));
+}
+
+
+/*
+DMX512:
+1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 
+0000000000000000 0000000000000000 0000000000001110 0000000011111110 (null byte)
+0000000011111110 0000000011111110 (1st value)
+...
+0000000011111110 0000000011111110 
+0000000011111110 0000000011111111 (512th value)
+
+DMX256:
+1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 1111111111111111 
+0000000000000000 0000000000000000 0000000000001110 0000000011111110 (null byte)
+0000000011111110 0000000011111110 (1st value)
+...
+0000000011111110 0000000011111111 (256th value)
+*/
+void debugI2S() {
+  int count = sizeof(global.i2s_data) / sizeof(uint16_t);
+  uint16_t * words = (uint16_t*) &(global.i2s_data);  
+  for (int i=0; i < count; i++) {
+    uint16_t b = words[i];
+    byte hi = b>>8;
+    byte lo = b & 0xff;
+    printBits(hi);
+    printBits(lo);
+    Serial.print(" ");
+  }
+  Serial.println();      
 }
 
 void outputI2S(void) {
   // From the comment in i2s.h:
   // "A frame is just a int16_t for mono, for stereo a frame is two int16_t, one for each channel."
   // Therefore we need to divide by 4 in total
-  i2s_write_buffer((int16_t*) &global.i2s_data, sizeof(global.i2s_data) / 4);
+  int frames = sizeof(global.i2s_data) / 4;
+  //debugI2S();
+  
+  i2s_write_buffer((int16_t*) &global.i2s_data, frames);
 
   i2sCounter++;
   long now = millis();
@@ -628,8 +673,8 @@ void testCode() {
   global.i2s_data.dmx_bytes[4] = (flipByte(  0) << 8) | 0b0000000011111110; // y fine
 
   global.i2s_data.dmx_bytes[5] = (flipByte( 30) << 8) | 0b0000000011111110; // color wheel: red
-  global.i2s_data.dmx_bytes[6] = (flipByte(  0) << 8)   | 0b0000000011111110; // pattern
-  global.i2s_data.dmx_bytes[7] = (flipByte(  0) << 8)   | 0b0000000011111110; // strobe
+  global.i2s_data.dmx_bytes[6] = (flipByte(  0) << 8) | 0b0000000011111110; // pattern
+  global.i2s_data.dmx_bytes[7] = (flipByte(  0) << 8) | 0b0000000011111110; // strobe
   global.i2s_data.dmx_bytes[8] = (flipByte(150) << 8) | 0b0000000011111110; // brightness
 #endif
 }
